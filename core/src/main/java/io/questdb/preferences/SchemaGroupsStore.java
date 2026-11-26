@@ -98,9 +98,8 @@ public final class SchemaGroupsStore {
     public synchronized void init(boolean restored) {
         try (Path path = new Path().of(configuration.getDbRoot()).concat(FILE_NAME)) {
             boolean exists = configuration.getFilesFacade().exists(path.$());
-            Layout loaded = exists ? readLayout(configuration, path.$()) : new Layout();
+            Layout loaded = exists ? readLayout(configuration, path.$(), restored) : new Layout(newVersion());
             if (restored || !exists) {
-                loaded.version = UUID.randomUUID().toString();
                 persist(loaded);
             }
             layout = loaded;
@@ -249,7 +248,11 @@ public final class SchemaGroupsStore {
         return name;
     }
 
-    private static Layout readLayout(CairoConfiguration configuration, LPSZ path) {
+    private static String newVersion() {
+        return UUID.randomUUID().toString();
+    }
+
+    private static Layout readLayout(CairoConfiguration configuration, LPSZ path, boolean restored) {
         try (BlockFileReader reader = new BlockFileReader(configuration)) {
             reader.of(path);
             var cursor = reader.getCursor();
@@ -260,9 +263,9 @@ public final class SchemaGroupsStore {
             if (block.type() != FORMAT) {
                 throw CairoException.critical(0).put("Unsupported schema groups store format");
             }
-            Layout result = new Layout();
-            result.version = block.getStr(0).toString();
-            long offset = Vm.getStorageLength(result.version);
+            String storedVersion = block.getStr(0).toString();
+            Layout result = new Layout(restored ? newVersion() : storedVersion);
+            long offset = Vm.getStorageLength(storedVersion);
             for (TableToken.Type kind : TableToken.Type.values()) {
                 Section section = result.sections.get(kind);
                 int count = block.getInt(offset);
@@ -354,7 +357,6 @@ public final class SchemaGroupsStore {
     }
 
     private void commit(Layout candidate) {
-        candidate.version = UUID.randomUUID().toString();
         persist(candidate);
         layout = candidate;
     }
@@ -416,21 +418,21 @@ public final class SchemaGroupsStore {
 
     private static final class Layout {
         private final EnumMap<TableToken.Type, Section> sections = new EnumMap<>(TableToken.Type.class);
-        private String version = UUID.randomUUID().toString();
+        private final String version;
 
-        private Layout() {
+        private Layout(String version) {
+            this.version = version;
             for (TableToken.Type kind : TableToken.Type.values()) {
                 sections.put(kind, new Section());
             }
         }
 
         private Layout(Layout source) {
-            version = source.version;
+            this(newVersion());
             for (TableToken.Type kind : TableToken.Type.values()) {
-                Section section = new Section();
+                Section section = sections.get(kind);
                 section.groups.putAll(source.sections.get(kind).groups);
                 section.assignments.putAll(source.sections.get(kind).assignments);
-                sections.put(kind, section);
             }
         }
     }
