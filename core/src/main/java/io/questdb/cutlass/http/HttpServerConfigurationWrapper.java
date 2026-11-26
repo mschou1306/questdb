@@ -107,6 +107,11 @@ public class HttpServerConfigurationWrapper implements DynamicFiberWorkerPoolCon
     }
 
     @Override
+    public ObjHashSet<String> getContextPathSchemaGroups() {
+        return getDelegate().getContextPathSchemaGroups();
+    }
+
+    @Override
     public ObjHashSet<String> getContextPathSettings() {
         return getDelegate().getContextPathSettings();
     }

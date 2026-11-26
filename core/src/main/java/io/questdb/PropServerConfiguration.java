@@ -284,6 +284,7 @@ public class PropServerConfiguration implements ServerConfiguration {
     private final ObjHashSet<String> httpContextPathILP = new ObjHashSet<>();
     private final ObjHashSet<String> httpContextPathILPPing = new ObjHashSet<>();
     private final ObjHashSet<String> httpContextPathImport = new ObjHashSet<>();
+    private final ObjHashSet<String> httpContextPathSchemaGroups = new ObjHashSet<>();
     private final ObjHashSet<String> httpContextPathSettings = new ObjHashSet<>();
     private final ObjHashSet<String> httpContextPathSqlExecute = new ObjHashSet<>();
     private final ObjHashSet<String> httpContextPathSqlValidate = new ObjHashSet<>();
@@ -1408,6 +1409,7 @@ public class PropServerConfiguration implements ServerConfiguration {
             // we use defaults, because this is what the Web Console expects
             httpContextPathImport.add(httpContextWebConsole + "/imp");
             httpContextPathExport.add(httpContextWebConsole + "/exp");
+            httpContextPathSchemaGroups.add(httpContextWebConsole + "/schema-groups");
             httpContextPathSettings.add(httpContextWebConsole + "/settings");
             httpContextPathTableStatus.add(httpContextWebConsole + "/chk");
             httpContextPathSqlExecute.add(httpContextWebConsole + "/exec");
@@ -6832,6 +6834,11 @@ public class PropServerConfiguration implements ServerConfiguration {
         @Override
         public ObjHashSet<String> getContextPathImport() {
             return httpContextPathImport;
+        }
+
+        @Override
+        public ObjHashSet<String> getContextPathSchemaGroups() {
+            return httpContextPathSchemaGroups;
         }
 
         @Override

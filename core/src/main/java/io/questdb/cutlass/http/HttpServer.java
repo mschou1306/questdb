@@ -32,6 +32,7 @@ import io.questdb.cutlass.AcceptGatedJob;
 import io.questdb.cutlass.http.processors.ExportQueryProcessor;
 import io.questdb.cutlass.http.processors.LineHttpPingProcessor;
 import io.questdb.cutlass.http.processors.LineHttpProcessorConfiguration;
+import io.questdb.cutlass.http.processors.SchemaGroupsProcessor;
 import io.questdb.cutlass.http.processors.SettingsProcessor;
 import io.questdb.cutlass.http.processors.StaticContentProcessorFactory;
 import io.questdb.cutlass.http.processors.TableStatusCheckProcessor;
@@ -257,6 +258,18 @@ public class HttpServer implements Closeable {
                 }
             });
         }
+
+        server.bind(new HttpRequestHandlerFactory() {
+            @Override
+            public ObjHashSet<String> getUrls() {
+                return httpServerConfiguration.getContextPathSchemaGroups();
+            }
+
+            @Override
+            public HttpRequestHandler newInstance() {
+                return new SchemaGroupsProcessor(cairoEngine, serverConfiguration);
+            }
+        });
 
         final SettingsProcessor settingsProcessor = new SettingsProcessor(cairoEngine, serverConfiguration);
         server.bind(new HttpRequestHandlerFactory() {

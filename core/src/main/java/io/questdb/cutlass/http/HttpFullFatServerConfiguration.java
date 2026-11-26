@@ -55,6 +55,9 @@ public interface HttpFullFatServerConfiguration extends HttpServerConfiguration 
     ObjHashSet<String> CONTEXT_PATH_IMPORT = new ObjHashSet<>() {{
         add("/imp");
     }};
+    ObjHashSet<String> CONTEXT_PATH_SCHEMA_GROUPS = new ObjHashSet<>() {{
+        add("/schema-groups");
+    }};
     ObjHashSet<String> CONTEXT_PATH_SETTINGS = new ObjHashSet<>() {{
         add("/settings");
     }};
@@ -105,6 +108,10 @@ public interface HttpFullFatServerConfiguration extends HttpServerConfiguration 
 
     default ObjHashSet<String> getContextPathImport() {
         return CONTEXT_PATH_IMPORT;
+    }
+
+    default ObjHashSet<String> getContextPathSchemaGroups() {
+        return CONTEXT_PATH_SCHEMA_GROUPS;
     }
 
     default ObjHashSet<String> getContextPathSettings() {

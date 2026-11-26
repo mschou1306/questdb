@@ -292,6 +292,10 @@ public class CairoException extends RuntimeException implements Sinkable, Flywei
                 .put(']');
     }
 
+    public static CairoException schemaGroupsOutOfDate() {
+        return nonCritical().setPreferencesOutOfDateError().put("Schema groups changed");
+    }
+
     public static CairoException queryCancelled(long fd) {
         CairoException exception = nonCritical()
                 .put("cancelled by user")

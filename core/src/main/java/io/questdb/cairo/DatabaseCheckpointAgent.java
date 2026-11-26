@@ -48,6 +48,7 @@ import io.questdb.griffin.model.IntervalUtils;
 import io.questdb.log.Log;
 import io.questdb.log.LogFactory;
 import io.questdb.log.LogRecord;
+import io.questdb.preferences.SchemaGroupsStore;
 import io.questdb.preferences.SettingsStore;
 import io.questdb.std.CharSequenceLongHashMap;
 import io.questdb.std.CharSequenceObjHashMap;
@@ -181,10 +182,9 @@ public class DatabaseCheckpointAgent implements DatabaseCheckpointStatus, QuietC
     }
 
     /**
-     * Restore _preferences~store from checkpoint to db_root if it exists in the checkpoint.
-     * This will overwrite any existing file at the destination.
+     * Restore instance settings from checkpoint, clearing groups for pre-feature checkpoints.
      */
-    private static void restorePreferencesStore(FilesFacade ff, Path dstPath, int rootLen, Path srcPath, int snapshotDbLen) {
+    private static void restoreSettingsStores(FilesFacade ff, Path dstPath, int rootLen, Path srcPath, int snapshotDbLen) {
         srcPath.trimTo(snapshotDbLen).concat(SettingsStore.PREFERENCES_FILE_NAME).$();
         if (ff.exists(srcPath.$())) {
             dstPath.trimTo(rootLen).concat(SettingsStore.PREFERENCES_FILE_NAME).$();
@@ -193,6 +193,15 @@ public class DatabaseCheckpointAgent implements DatabaseCheckpointStatus, QuietC
             } else {
                 LOG.info().$("_preferences~store restored from checkpoint").$();
             }
+        }
+        srcPath.trimTo(snapshotDbLen).concat(SchemaGroupsStore.FILE_NAME);
+        dstPath.trimTo(rootLen).concat(SchemaGroupsStore.FILE_NAME);
+        if (ff.exists(srcPath.$())) {
+            if (ff.copy(srcPath.$(), dstPath.$()) < 0) {
+                throw CairoException.critical(ff.errno()).put("Could not restore schema groups");
+            }
+        } else if (ff.exists(dstPath.$()) && !ff.removeQuiet(dstPath.$())) {
+            throw CairoException.critical(ff.errno()).put("Could not clear schema groups");
         }
     }
 
@@ -790,6 +799,9 @@ public class DatabaseCheckpointAgent implements DatabaseCheckpointStatus, QuietC
                         mem.putStr(configuration.getSnapshotInstanceId());
                         mem.close();
 
+                        path.of(checkpointRoot).concat(configuration.getDbDirectory());
+                        engine.getSchemaGroupsStore().persistCheckpoint(path.toString());
+
                         // Copy _preferences~store if it exists (contains WebConsole instance name, etc.)
                         SettingsStore settingsStore = engine.getSettingsStore();
                         if (settingsStore.getVersion() > 0) {
@@ -1081,6 +1093,10 @@ public class DatabaseCheckpointAgent implements DatabaseCheckpointStatus, QuietC
         }
     }
 
+    boolean hasRecoveredCheckpoint() {
+        return hasRecoveredCheckpoint;
+    }
+
     void recover() {
         hasRecoveredCheckpoint = false;
         recoveredCheckpointDir = null;
@@ -1218,7 +1234,7 @@ public class DatabaseCheckpointAgent implements DatabaseCheckpointStatus, QuietC
                         }
                 );
 
-                restorePreferencesStore(ff, dstPath, rootLen, srcPath, snapshotDbLen);
+                restoreSettingsStores(ff, dstPath, rootLen, srcPath, snapshotDbLen);
                 removeNonCheckpointedTableDirs(ff, dstPath, rootLen, srcPath, snapshotDbLen);
             } catch (Throwable e) {
                 LOG.error().$("error during checkpoint recovery, aborting async tasks [error=").$(e).I$();

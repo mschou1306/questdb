@@ -157,6 +157,7 @@ import io.questdb.mp.Sequence;
 import io.questdb.mp.SimpleWaitingLock;
 import io.questdb.mp.continuation.FiberCancellationSignal;
 import io.questdb.mp.continuation.TimerShards;
+import io.questdb.preferences.SchemaGroupsStore;
 import io.questdb.preferences.SettingsStore;
 import io.questdb.std.BoolList;
 import io.questdb.std.Chars;
@@ -393,6 +394,8 @@ public class CairoEngine implements Closeable, WriterSource {
     // and hydration threads; volatile ensures safe cross-thread publication after completeInit.
     private volatile MetadataCache metadataCache;
     private volatile Runnable recentWriteTrackerHydrationCallback;
+    // volatile: see metadataCache comment above.
+    private volatile SchemaGroupsStore schemaGroupsStore;
     // volatile: see metadataCache comment above.
     private volatile SettingsStore settingsStore;
     // volatile: see metadataCache comment above.
@@ -1341,6 +1344,8 @@ public class CairoEngine implements Closeable, WriterSource {
             // adaptive recovery. A later call completes it here.
             if (isCompleteInitDone) {
                 tableNameRegistry.reload();
+                schemaGroupsStore.init(checkpointAgent.hasRecoveredCheckpoint());
+                schemaGroupsStore.reconcile();
                 new RecoveryCoordinator(this).recover();
                 checkpointAgent.completeRecovery();
             }
@@ -1486,10 +1491,13 @@ public class CairoEngine implements Closeable, WriterSource {
         checkpointRecover();
         // Initialize settings store after checkpoint recovery so it reads the restored file
         settingsStore.init();
+        schemaGroupsStore = new SchemaGroupsStore(this);
+        schemaGroupsStore.init(checkpointAgent.hasRecoveredCheckpoint());
         // Migrate database files.
         EngineMigration.migrateEngineTo(this, ColumnType.VERSION, ColumnType.MIGRATION_VERSION, false);
         tableNameRegistry = createTableNameRegistry(configuration, tableFlagResolver);
         tableNameRegistry.reload();
+        schemaGroupsStore.reconcile();
         // Adaptive recovery runs after the table registry loads, so tables are enumerable, and before any WAL
         // apply or table open. For each WAL table with a save point it restores _txn, _cv and _meta from it, and
         // WAL apply then replays (epoch.seqTxn, frontier]. Outside adaptive it removes the save point.
@@ -2235,7 +2243,7 @@ public class CairoEngine implements Closeable, WriterSource {
                                 .put("could not remove table [table=").put(tableToken).put(", thread=").put(Thread.currentThread().threadId()).put(']');
                     }
 
-                    tableNameRegistry.dropTable(tableToken);
+                    dropTableTokenAndSchemaGroup(tableToken);
                     // Remove the scoreboard after dropping the table from the registry
                     // Otherwise someone (like Column Purge Job) can create pooled instances of the scoreboard
                     // it from the registry without knowing that the table is being dropped.
@@ -2646,6 +2654,10 @@ public class CairoEngine implements Closeable, WriterSource {
         final TableRecordMetadata metadata = sequencerMetadataPool.get(tableToken);
         validateDesiredMetadataVersion(tableToken, metadata, desiredVersion);
         return metadata;
+    }
+
+    public @NotNull SchemaGroupsStore getSchemaGroupsStore() {
+        return schemaGroupsStore;
     }
 
     public @NotNull SettingsStore getSettingsStore() {
@@ -3503,7 +3515,7 @@ public class CairoEngine implements Closeable, WriterSource {
     }
 
     public boolean notifyDropped(TableToken tableToken) {
-        if (tableNameRegistry.dropTable(tableToken)) {
+        if (dropTableTokenAndSchemaGroup(tableToken)) {
             notifyPoolsTableDropped(tableToken, false);
             final MatViewRefreshTask matViewRefreshTask = tlMatViewRefreshTask.get();
             matViewRefreshTask.clear();
@@ -4289,6 +4301,23 @@ public class CairoEngine implements Closeable, WriterSource {
         }
         if (vd.getSeqTxn() != expectedTxn) {
             throw TableReferenceOutOfDateException.ofOutdatedView(tableToken, expectedTxn, vd.getSeqTxn());
+        }
+    }
+
+    private boolean dropTableTokenAndSchemaGroup(TableToken tableToken) {
+        if (schemaGroupsStore == null) {
+            return tableNameRegistry.dropTable(tableToken);
+        }
+        synchronized (schemaGroupsStore) {
+            boolean dropped = tableNameRegistry.dropTable(tableToken);
+            if (dropped) {
+                try {
+                    schemaGroupsStore.onDrop(tableToken);
+                } catch (CairoException e) {
+                    LOG.error().$("Could not clean up dropped object's schema group: ").$safe(e.getFlyweightMessage()).$();
+                }
+            }
+            return dropped;
         }
     }
 
@@ -5476,22 +5505,28 @@ public class CairoEngine implements Closeable, WriterSource {
                 // A crash after the swap publishes the new table, unseeded until commitRebaseSeed below. swapTable
                 // drops the old directory, evicts its metadata-cache entry, repoints the name to the new directory
                 // and hydrates its cache.
-                final TableToken swapped = tableNameRegistry.swapTable(
-                        oldToken,
-                        tableName,
-                        newDirName,
-                        newTableId,
-                        oldToken.getType(),
-                        true
-                );
-                if (swapped == null) {
-                    throw CairoException.nonCritical()
-                            .put("rebase target name was taken concurrently [table=").put(tableName).put(']');
+                synchronized (schemaGroupsStore) {
+                    final TableToken swapped = tableNameRegistry.swapTable(
+                            oldToken,
+                            tableName,
+                            newDirName,
+                            newTableId,
+                            oldToken.getType(),
+                            true
+                    );
+                    if (swapped == null) {
+                        throw CairoException.nonCritical()
+                                .put("rebase target name was taken concurrently [table=").put(tableName).put(']');
+                    }
+                    // The swap is the point of no return: the new directory is the table.
+                    oldTableDropped = true;
+                    newToken = swapped;
+                    try {
+                        schemaGroupsStore.onIdChanged(oldToken, newToken);
+                    } catch (CairoException e) {
+                        LOG.error().$("Could not move rebased object's schema group: ").$safe(e.getFlyweightMessage()).$();
+                    }
                 }
-                // The swap is the point of no return: from here the new directory is the table (its hard links
-                // are the only surviving copy of the data), so the catch below must leave it on disk.
-                oldTableDropped = true;
-                newToken = swapped;
 
                 // Seed two empty transactions so real data starts at seqTxn 3 (the uploader skips seqTxn 1
                 // and records seqTxn 2 as first_txn=2). The second seed is what stops an idle rebased table
